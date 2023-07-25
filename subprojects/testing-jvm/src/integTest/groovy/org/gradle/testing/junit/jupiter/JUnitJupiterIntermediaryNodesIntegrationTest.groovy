@@ -16,21 +16,63 @@
 
 package org.gradle.testing.junit.jupiter
 
-import org.gradle.integtests.fixtures.DefaultTestExecutionResult
+
+import org.gradle.integtests.fixtures.HtmlTestExecutionResult
 import org.gradle.integtests.fixtures.TargetCoverage
 import org.gradle.testing.fixture.AbstractTestingMultiVersionIntegrationTest
 
 import static org.gradle.testing.fixture.JUnitCoverage.JUNIT_JUPITER
-import static org.gradle.testing.fixture.JUnitCoverage.getLATEST_JUPITER_VERSION
+import static org.hamcrest.CoreMatchers.containsString
 
 @TargetCoverage({ JUNIT_JUPITER })
 class JUnitJupiterIntermediaryNodesIntegrationTest extends AbstractTestingMultiVersionIntegrationTest implements JUnitJupiterMultiVersionTest {
+
     def "sets class name on intermediary nodes"() {
         given:
-        executer.noExtraLogging()
-        file('src/test/java/org/gradle/TestWithIntermediaryNodes.java').text = """
-            package org.gradle;
+        buildScript """
+            $junitSetup
+            dependencies {
+                testImplementation(platform('org.junit:junit-bom:$version'))
+                testImplementation('org.junit.platform:junit-platform-launcher')
+            }
+            test {
+                beforeSuite {
+                    println("beforeSuite: " + it.className + " " + it.name)
+                }
 
+                beforeTest {
+                    println("beforeTest: " + it.className + " " + it.name)
+                }
+            }
+        """
+
+        and:
+        testClass "SomeTest"
+
+        when:
+        succeeds "test"
+
+        then:
+        new HtmlTestExecutionResult(testDirectory)
+            .testClassStartsWith("SomeTest")
+            // This assertion fails, because the class name is not set on intermediary nodes (there's a similar issue with JUnit 4 too)
+            .assertStdout(containsString("beforeSuite: SomeTest test(int, int)"))
+    }
+
+    private String getJunitSetup() {
+        """
+            apply plugin: 'java'
+            ${mavenCentralRepository()}
+            dependencies {
+                ${testFrameworkDependencies}
+                testImplementation 'org.junit.jupiter:junit-jupiter:${version}'
+            }
+            test.${configureTestFramework}
+        """.stripIndent()
+    }
+
+    private void testClass(String name) {
+        file("src/test/java/${name}.java") << """
             ${testFrameworkImports}
             import java.util.Arrays;
             import java.util.List;
@@ -38,8 +80,7 @@ class JUnitJupiterIntermediaryNodesIntegrationTest extends AbstractTestingMultiV
             import org.junit.jupiter.params.ParameterizedTest;
             import org.junit.jupiter.params.provider.Arguments;
             import org.junit.jupiter.params.provider.MethodSource;
-
-            public class TestWithIntermediaryNodes {
+            public class $name {
                 @ParameterizedTest
                 @MethodSource("data")
                 void test(int a, int b) {
@@ -54,31 +95,6 @@ class JUnitJupiterIntermediaryNodesIntegrationTest extends AbstractTestingMultiV
                     );
                 }
             }
-        """.stripIndent()
-        buildScriptWithJupiterDependencies("""
-            test {
-                useJUnitPlatform()
-            }
-        """)
-
-        when:
-        run('check')
-
-        then:
-        def result = new DefaultTestExecutionResult(testDirectory)
-        result.assertTestClassesExecuted('org.gradle.TestWithIntermediaryNodes')
-    }
-
-    def buildScriptWithJupiterDependencies(script, String version = LATEST_JUPITER_VERSION) {
-        buildScript("""
-            apply plugin: 'java'
-
-            ${mavenCentralRepository()}
-            dependencies {
-                testImplementation 'org.junit.jupiter:junit-jupiter:${version}'
-                testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-            }
-            $script
-        """)
+        """
     }
 }
